@@ -1,6 +1,9 @@
-package com.example.accelerometerdemo;
+package com.example.accelerometerdemo; // Keep your package name
+
+import static android.os.Build.VERSION.SDK_INT;
 
 import android.Manifest;
+import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -8,24 +11,27 @@ import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
-import android.content.BroadcastReceiver;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanRecord;
+import android.bluetooth.le.ScanResult;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.ParcelUuid;
 import android.util.Log;
-import android.view.View;
-import android.widget.Adapter;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.ListView;
+import android.view.View; // Needed for Button
+import android.widget.ArrayAdapter; // Needed for ListView
+import android.widget.Button; // Needed for Button
+import android.widget.ListView; // Needed for ListView
+import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
@@ -52,193 +58,556 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-
 public class MainActivity extends AppCompatActivity {
 
-    public static final String TAG = "MainActivity";
-    BluetoothAdapter mBluetoothAdapter;
-    Button btnEnableDisable_Discoverable;
+    public static final String TAG = "BlueIO_Accelerometer"; // More specific TAG
+
+    // From iothingy app
+    public static String targetDeviceName = "BlueIOThingy"; // Name of your BlueIO device
+    private static final String BLUEIO_UUID_SERVICE = "ef680400-9b35-4933-9b10-52ffa9740042";
+    // Assuming Accelerometer UUID is 0401 based on common patterns
+    private static final String ACCELEROMETER_CHAR_UUID_STRING = "ef680406-9b35-4933-9b10-52ffa9740042";
+    private static final UUID ACCELEROMETER_CHAR_UUID = UUID.fromString(ACCELEROMETER_CHAR_UUID_STRING);
+    private static final UUID CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"); // Standard CCCD
+
+    private static long SCAN_PERIOD = 50000; // 5 seconds scan
+    private Handler mHandler;
+
+    // Permission handling from iothingy app
+    private static final int REQUEST_CODE_COARSE_PERMISSION = 1;
+    private static final int REQUEST_CODE_BLUETOOTH_PERMISSION = 2;
+
+    private ActivityResultContracts.RequestMultiplePermissions requestMultiplePermissionsContract;
+    private ActivityResultLauncher<String[]> multiplePermissionActivityResultLauncher;
+
+    private BluetoothAdapter mBluetoothAdapter;
+    private BluetoothManager mBluetoothManager;
+    private BluetoothLeScanner mLEScanner;
+    private BluetoothGatt mBluetoothGatt;
+    private BluetoothGattService mBlueIOService; // Changed from mCustomService
+    private BluetoothGattCharacteristic mAccelerometerCharacteristic; // Changed from Characteristic
+
+    private String discoveredDeviceName;
+    private String discoveredDeviceAddress;
+    private boolean isConnecting = false;
+    private boolean notificationEnabled = false; // Flag for notification status
+
+    // UI elements
+    private TextView statusTextView; // To show connection status
     private LineChart accelerometerChart;
 
-    private static final int REQUEST_BLUETOOTH_PERMISSIONS = 1;
-
-    // Activity Result Launcher for enabling Bluetooth
-    private ActivityResultLauncher<Intent> enableBtLauncher;
-
-    // Variables for BT discovery
-    private ArrayList<String> deviceList = new ArrayList<>();
-    private ArrayAdapter<String> deviceListAdapter;
-    private ListView lvNewDevices;
-
-    // Map to store BluetoothDevice objects corresponding to the names in the list
-    private Map<String, BluetoothDevice> discoveredDevicesMap = new HashMap<>();
-
-    // BLE specific variables
-    private BluetoothGatt mGatt; // Holds the GATT client connection
-    private boolean isConnecting = false;
-
-    // Custom BLE UUIDS for the devices
-    private static final UUID BLUEIO_SERVICE_UUID = UUID.fromString("ef680400-9b35-4933-9b10-52ffa9740042");
-    // ****** CHANGE THIS UUID to your ACTUAL Accelerometer Characteristic UUID ******
-    private static final UUID ACCELEROMETER_CHAR_UUID = UUID.fromString("ef680401-9b35-4933-9b10-52ffa9740042"); // HYPOTHETICAL ACCELEROMETER UUID
-    private static final UUID CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"); // Standard CCCD UUID
-
-
-    // Data for chart
+    // Chart Data
     private ArrayList<Entry> accelXEntries = new ArrayList<>();
     private ArrayList<Entry> accelYEntries = new ArrayList<>();
     private ArrayList<Entry> accelZEntries = new ArrayList<>();
     private int dataPointCount = 0;
 
-    @RequiresApi(api = Build.VERSION_CODES.S)
-    private void requestBluetoothPermissions() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) != PackageManager.PERMISSION_GRANTED
-        ) {
 
-            ActivityCompat.requestPermissions(this,
-                    new String[]{
-                            Manifest.permission.BLUETOOTH,
-                            Manifest.permission.BLUETOOTH_SCAN,
-                            Manifest.permission.BLUETOOTH_ADVERTISE,
-                            Manifest.permission.BLUETOOTH_CONNECT,
-                            Manifest.permission.ACCESS_FINE_LOCATION
-                    },
-                    REQUEST_BLUETOOTH_PERMISSIONS);
-        } else {
-            // Permissions already granted, proceed with Bluetooth operations
+    // --- BLE Scan Callback ---
+    private ScanCallback mScanCallback = new ScanCallback() {
+        @Override
+        public void onScanResult(int callbackType, ScanResult result) {
+            // Default behaviour
+            super.onScanResult(callbackType, result);
+            BluetoothDevice device = result.getDevice();
 
+            if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "Check Bluetooth permissions again");
+                return;
+            }
+
+            String name = device.getName();
+            String address = device.getAddress();
+            List<ParcelUuid> uuids = result.getScanRecord().getServiceUuids();
+
+            Log.d(TAG, "device: " + name + ", address: " + address + ", UUIDs: " + (uuids != null ? uuids.toString() : "null"));
+
+            // If a device is found with the same name, attempt to establish a GATT connection
+            if (name != null && name.equals(targetDeviceName)) {
+                // Device found, stop scanning and connect
+                if (SDK_INT >= Build.VERSION_CODES.O) {
+                    Log.i(TAG, "Found target device: " + name + " - " + address + " - " + (uuids != null ? uuids.toString() : "null") + " - isConnectable : " + result.isConnectable());
+                }
+                discoveredDeviceName = name;
+                discoveredDeviceAddress = address;
+
+                // Stop the scan immediately upon finding the device
+                if (mBluetoothAdapter.isEnabled()) {
+                    if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                        return; // Should be handled by initial permission request
+                    }
+                    mLEScanner.stopScan(this);
+                    mHandler.removeCallbacksAndMessages(null); // Remove any pending scan stop
+                    connectToDevice(device);
+                }
+            }
+            else {
+                Log.i(TAG, "Device Name " + device.getName());
+            }
         }
-    }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
-            boolean allPermissionsGranted = true;
-            for (int i = 0; i < 4; i++) {
-                if (grantResults[i] != PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this, "Bluetooth permissions " + grantResults[i] + " denied", Toast.LENGTH_SHORT).show();
+        @Override
+        public void onScanFailed(int errorCode) {
+            super.onScanFailed(errorCode);
+            Log.e(TAG, "Scan Failed: " + errorCode);
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Scan Failed: " + errorCode, Toast.LENGTH_LONG).show());
+            isConnecting = false; // Reset connection flag
+        }
+    };
+
+    // --- GATT Callbacks (runs when the device is connected to the server and sends information such as connection status and further Gatt operations) ---
+    private BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
+        @Override
+        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+            // GATT operation succeeded, now checking if the device is connected to the server
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    Log.d(TAG, "Connected to GATT server.");
+                    isConnecting = false;
+
+                    // Inform user that the connection is successfuly established
+                    runOnUiThread(() -> {
+                        if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                            return;
+                        }
+                        statusTextView.setText("Status: Connected to " + (gatt.getDevice().getName() != null ? gatt.getDevice().getName() : gatt.getDevice().getAddress()));
+                        Toast.makeText(MainActivity.this, "Connected.", Toast.LENGTH_SHORT).show();
+                    });
+
+                    // Discover services after successful connection
+                    if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                        Log.w(TAG, "BLUETOOTH_CONNECT permission missing for discoverServices.");
+                        return;
+                    }
+                    gatt.discoverServices();
+                }
+                else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    Log.d(TAG, "Disconnected from GATT server.");
+                    isConnecting = false;
+
+                    // Inform user of this disconnection
+                    runOnUiThread(() -> {
+                        statusTextView.setText("Status: Disconnected");
+                        Toast.makeText(MainActivity.this, "Disconnected.", Toast.LENGTH_SHORT).show();
+
+                        // Clear chart data upon disconnection
+                        accelerometerChart.clear();
+                        dataPointCount = 0;
+                        notificationEnabled = false; // Reset notification flag
+
+                        // Restart scan here if auto-reconnect is needed
+                        // scanBluetoothDevices(true);
+                    });
+
+                    // Close the GATT client
+                    gatt.close();
+                    mBluetoothGatt = null;
                 }
             }
 
-            if (allPermissionsGranted) {
-                // Permissions granted, proceed with Bluetooth operations
+            // GATT operations failed, connection issues
+            else {
+                Log.w(TAG, "GATT connection failed with status: " + status);
+                isConnecting = false;
 
+                // Inform user
+                runOnUiThread(() -> {
+                    statusTextView.setText("Status: Connection Failed (" + status + ")");
+                    Toast.makeText(MainActivity.this, "Connection failed (Status: " + status + ")", Toast.LENGTH_LONG).show();
+                });
+
+                // Close the GATT client
+                gatt.close();
+                mBluetoothGatt = null;
             }
         }
+
+        @Override
+        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "Services discovered.");
+
+                // Finds if a service with the provided UUID above exists in the device
+                mBlueIOService = gatt.getService(UUID.fromString(BLUEIO_UUID_SERVICE));
+                if (mBlueIOService == null) {
+                    Log.w(TAG, "BlueIO Service (UUID: " + BLUEIO_UUID_SERVICE + ") not found!");
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "BlueIO Service not found!", Toast.LENGTH_LONG).show());
+                    return;
+                }
+
+                // If that service exist, find its characteristics
+                mAccelerometerCharacteristic = mBlueIOService.getCharacteristic(ACCELEROMETER_CHAR_UUID);
+                if (mAccelerometerCharacteristic != null) {
+                    Log.d(TAG, "Found Accelerometer Characteristic!");
+                    // Enable notifications
+                    setCharacteristicNotification(gatt, mAccelerometerCharacteristic, true);
+                }
+                else {
+                    Log.w(TAG, "Accelerometer Characteristic (UUID: " + ACCELEROMETER_CHAR_UUID_STRING + ") not found.");
+                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Accelerometer characteristic not found.", Toast.LENGTH_LONG).show());
+                }
+            }
+            // In the case the GATT connection failed, send a warning message in console
+            else Log.w(TAG, "onServicesDiscovered received: " + status);
+        }
+
+        // Whenever the motion sensor "characteristic" gets updated, update the graph along with it (based on code from IOThingy app demo)
+        // ... inside MainActivity class ...
+
+        @Override
+        public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+            if (ACCELEROMETER_CHAR_UUID.equals(characteristic.getUuid())) {
+                byte[] data = characteristic.getValue();
+
+                // The data format is a 16-byte payload.
+                if (data != null && data.length >= 16) {
+                    // Use a ByteBuffer to parse the data safely with the correct byte order.
+                    ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+
+                    // Skip the first 8 bytes of the payload.
+                    buffer.position(8);
+
+                    // Read the three 16-bit signed integers (shorts) for each axis in the correct order.
+                    // The data seems to be in Y, Z, X order based on your observations.
+                    short yRaw = buffer.getShort();
+                    short zRaw = buffer.getShort();
+                    short xRaw = buffer.getShort();
+
+                    // The scale factor for the ICM-20948 depends on the configured range.
+                    // A common value for a ±2g range is 16384.0f, which aligns with your previous working code.
+                    float scaleFactor = 16384.0f;
+
+                    float xAccel = (float) xRaw / scaleFactor;
+                    float yAccel = (float) yRaw / scaleFactor;
+                    float zAccel = (float) zRaw / scaleFactor;
+
+                    Log.d(TAG, String.format("Parsed Data - X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
+                    Log.d(TAG, String.format("Processed Accel: X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
+
+                    // Update UI on the chart
+                    runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
+                } else {
+                    Log.w(TAG, "Received incomplete or null accelerometer data: " + (data != null ? Arrays.toString(data) : "null"));
+                }
+            }
+        }
+
+        @Override
+        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "Descriptor written successfully: " + descriptor.getUuid().toString());
+                if (CCCD_UUID.equals(descriptor.getUuid())) {
+                    notificationEnabled = true;
+                    Log.d(TAG, "Notifications enabled for Accelerometer Characteristic.");
+                }
+            } else {
+                Log.e(TAG, "Descriptor write failed: " + status);
+            }
+        }
+    };
+
+    // --- Helper for converting byte array to int32 (Code from IOThingy app demo)---
+    public static int convertByteArrayToInt32(byte[] bytes) {
+        return ((bytes[3] & 0xFF) << 24) |
+                ((bytes[2] & 0xFF) << 16) |
+                ((bytes[1] & 0xFF) << 8) |
+                ((bytes[0] & 0xFF) << 0);
     }
 
+    // --- Activity Lifecycle and Permissions ---
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        EdgeToEdge.enable(this);
-        setContentView(R.layout.activity_main);
+        setContentView(R.layout.activity_main); // Keep your own layout for buttons/list/chart
+
+        // Apply window insets (from your previous code)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom);
             return insets;
         });
 
-        // Initialize ActivityResultLauncher for enabling Bluetooth
-        enableBtLauncher = registerForActivityResult(
-                new ActivityResultContracts.StartActivityForResult(),
-                result -> {
-                    if (result.getResultCode() == RESULT_OK) {
-                        Toast.makeText(this, "Bluetooth has been enabled.", Toast.LENGTH_SHORT).show();
-                        // Bluetooth is now enabled, you can try starting discovery
-                        startDiscovery();
-                    } else {
-                        Toast.makeText(this, "Bluetooth not enabled.", Toast.LENGTH_SHORT).show();
-                    }
-                }
-        );
+        mHandler = new Handler();
+        mBluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        mBluetoothAdapter = mBluetoothManager.getAdapter();
 
-        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-        if (mBluetoothAdapter == null) {
-            Toast.makeText(this, "Bluetooth not supported on this device.", Toast.LENGTH_LONG).show();
-            finish(); // Close the app if Bluetooth is not supported
+        // Check for BLE support and initialize BLE Scanner if it does
+        if (mBluetoothAdapter == null || !getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
+            Toast.makeText(this, "ble_not_supported", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+        mLEScanner = mBluetoothAdapter.getBluetoothLeScanner();
+
+        // Initialize UI elements
+        statusTextView = findViewById(R.id.statusTextView); // You'll need to add this to your layout
+        accelerometerChart = findViewById(R.id.accelerometerChart);
+        setupChart(accelerometerChart, "Accelerometer Data (X, Y, Z)");
+
+        Button btnStartScan = findViewById(R.id.btnStartDiscovery); // Use your existing button
+        btnStartScan.setOnClickListener(v -> startScan()); // Call the new startScan method
+
+        // --- Permission handling setup (from iothingy) ---
+        requestMultiplePermissionsContract = new ActivityResultContracts.RequestMultiplePermissions();
+        multiplePermissionActivityResultLauncher = registerForActivityResult(requestMultiplePermissionsContract, isGranted -> {
+            Log.d(TAG, "Permissions Launcher result: " + isGranted.toString());
+
+            // Check if all necessary permissions are granted (Seperated by asking based on build version of device
+            boolean allGranted = true;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (!isGranted.getOrDefault(Manifest.permission.BLUETOOTH_SCAN, false) || !isGranted.getOrDefault(Manifest.permission.BLUETOOTH_CONNECT, false)) {
+                    allGranted = false;
+                }
+            }
+            else {
+                if (!isGranted.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false)) { // Coarse is usually enough for pre-S scanning
+                    allGranted = false;
+                }
+            }
+
+            // If the device hasn't granted permission, ask user to do so
+            if (!allGranted) {
+                Toast.makeText(this, "Required Bluetooth/Location permissions not granted. App may not function correctly.", Toast.LENGTH_LONG).show();
+            }
+            else {
+                Log.d(TAG, "All necessary BLE permissions granted.");
+                // Permissions are good, proceed with asking to enable Bluetooth if needed
+                askBluetoothPermission();
+            }
+        });
+
+        // Request permissions on startup
+        requestBlePermissions(this, REQUEST_CODE_BLUETOOTH_PERMISSION);
+        askCoarsePermission();
+    }
+
+    // --- Method to scan devices nearby ---
+    private void startScan() {
+        // Prompt to enable Bluetooth if not enabled
+        if (!mBluetoothAdapter.isEnabled()) {
+            askBluetoothPermission();
             return;
         }
 
-        // Initialize ListView and Adapter
-        lvNewDevices = findViewById(R.id.lvNewDevices);
-        deviceListAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, deviceList);
-        lvNewDevices.setAdapter(deviceListAdapter);
+        if (mLEScanner == null) {
+            Toast.makeText(this, "BLE Scanner not initialized. Bluetooth may be off or unsupported.", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
-        // Setup item click listener for the discovered devices list
-        lvNewDevices.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
-                String deviceInfo = deviceList.get(position);
-                String deviceAddress = deviceInfo.substring(deviceInfo.lastIndexOf("\n") + 1);
-                BluetoothDevice device = discoveredDevicesMap.get(deviceInfo); // Get the actual BluetoothDevice object
+        // Check BLUETOOTH_SCAN permission before starting discovery
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "BLUETOOTH_SCAN permission required to start scan.", Toast.LENGTH_SHORT).show();
+            requestBlePermissions(this, REQUEST_CODE_BLUETOOTH_PERMISSION);
+            return;
+        }
+        else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "Location permission required to start scan.", Toast.LENGTH_SHORT).show();
+            askCoarsePermission();
+            return;
+        }
 
-                if (device != null) {
-                    if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                        return;
-                    }
-                    if (mBluetoothAdapter.isDiscovering()) {
-                        // Check BLUETOOTH_SCAN permission before cancelling discovery (if on S+)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                                ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                            Toast.makeText(MainActivity.this, "BLUETOOTH_SCAN permission needed to cancel discovery.", Toast.LENGTH_SHORT).show();
-                            requestBluetoothPermissions();
-                            return;
-                        }
-                        mBluetoothAdapter.cancelDiscovery();
-                        Log.d(TAG, "Cancelled discovery to connect to " + (device.getName() != null ? device.getName() : "Unknown Device"));
-                    }
-                    connectToDevice(device);
-                } else {
-                    Log.e(TAG, "BluetoothDevice object not found for: " + deviceInfo);
+        // Start discovery
+        Log.d(TAG, "Starting BLE scan for device: " + targetDeviceName);
+        runOnUiThread(() -> statusTextView.setText("Status: Scanning for " + targetDeviceName + "..."));
+        Toast.makeText(this, "Scanning for " + targetDeviceName + "...", Toast.LENGTH_SHORT).show();
+
+        // Reset current discovered device name
+        discoveredDeviceName = null;
+        discoveredDeviceAddress = null;
+
+        // This will run after scanning for "SCAN_PERIOD" amount of time and not finding anything
+        mHandler.postDelayed(() -> {
+            if (mBluetoothAdapter.isEnabled() && mLEScanner != null) {
+                // Stop mLEScanner from running if no device can be found
+                if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+                    return;
+                }
+                mLEScanner.stopScan(mScanCallback);
+
+                // Inform user of failure
+                Log.d(TAG, "Scan stopped by timeout.");
+                if (discoveredDeviceAddress == null) {
+                    runOnUiThread(() -> {
+                        statusTextView.setText("Status: Scan finished, device not found.");
+                        Toast.makeText(MainActivity.this, "Device " + targetDeviceName + " not found.", Toast.LENGTH_LONG).show();
+                    });
                 }
             }
-        });
+        }, SCAN_PERIOD);
 
-        // Request permissions
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            requestBluetoothPermissions();
-        }
-        else {
-            Log.d(TAG,"Asked bluetooth here");
-            // For older versions of android
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.BLUETOOTH},
-                        REQUEST_BLUETOOTH_PERMISSIONS); // Reusing the same request code for simplicity
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this,
-                        new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                REQUEST_BLUETOOTH_PERMISSIONS); // Reusing the same request code for simplicity
-            }
-        }
-
-        // Register for broadcasts when a device is discovered
-        IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
-        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED);
-        filter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
-        registerReceiver(mReceiver, filter);
-
-        // Add a button to start discovery
-        Button btnStartDiscovery = (Button)findViewById(R.id.btnStartDiscovery);
-        btnStartDiscovery.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startDiscovery();
-            }
-        });
-
-        // Initialize LineChart
-        accelerometerChart = findViewById(R.id.accelerometerChart); // Make sure this ID matches your XML
-        setupChart(accelerometerChart, "Accelerometer Data (X, Y, Z)");
+        // Start scan within that "SCAN_PERIOD" interval
+        mLEScanner.startScan(mScanCallback);
     }
 
-    // Chart Setup
+    private void connectToDevice(BluetoothDevice device) {
+        if (isConnecting) {
+            Log.d(TAG, "Already attempting to connect. Ignoring new request.");
+            return;
+        }
+
+        if (mBluetoothAdapter == null || device == null) {
+            Log.w(TAG, "BluetoothAdapter not initialized or unspecified device.");
+            return;
+        }
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "BLUETOOTH_CONNECT permission required to connect.", Toast.LENGTH_SHORT).show();
+            requestBlePermissions(this, REQUEST_CODE_BLUETOOTH_PERMISSION); // Re-request
+            return;
+        }
+
+        isConnecting = true;
+        // Connect with autoConnect = false for direct connection
+        mBluetoothGatt = device.connectGatt(this, false, mGattCallback, BluetoothDevice.TRANSPORT_LE);
+        Log.d(TAG, "Attempting to create a new GATT connection.");
+        runOnUiThread(() -> statusTextView.setText("Status: Connecting to " + (device.getName() != null ? device.getName() : device.getAddress()) + "..."));
+    }
+
+    /**
+     * Enables or disables notification/indication for a given characteristic.
+     * @param gatt The GATT client.
+     * @param characteristic The characteristic to enable/disable notifications for.
+     * @param enable True to enable, false to disable.
+     */
+    private void setCharacteristicNotification(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, boolean enable) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "BLUETOOTH_CONNECT permission missing for setCharacteristicNotification.");
+            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Permission missing to enable notifications.", Toast.LENGTH_SHORT).show());
+            return;
+        }
+
+        gatt.setCharacteristicNotification(characteristic, enable);
+
+        BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD_UUID);
+        if (descriptor == null) {
+            Log.e(TAG, "CCCD descriptor not found for characteristic: " + characteristic.getUuid().toString());
+            return;
+        }
+
+        byte[] value;
+        if (enable) {
+            if ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0) {
+                value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+                Log.d(TAG, "Enabling notifications for " + characteristic.getUuid().toString());
+            } else if ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
+                value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
+                Log.d(TAG, "Enabling indications for " + characteristic.getUuid().toString());
+            } else {
+                Log.w(TAG, "Characteristic does not support notifications or indications: " + characteristic.getUuid().toString());
+                return;
+            }
+        } else {
+            value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE;
+            Log.d(TAG, "Disabling notifications for " + characteristic.getUuid().toString());
+        }
+
+        descriptor.setValue(value);
+        gatt.writeDescriptor(descriptor);
+    }
+
+    // --- Permission Helper Methods (based on IOThingy Code) ---
+    private final String[] ANDROID_12_BLE_PERMISSIONS = new String[]{
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT
+    };
+    private final String[] BLE_PERMISSIONS = new String[]{
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.ACCESS_FINE_LOCATION
+    };
+
+    public void requestBlePermissions(Activity activity, int requestCode) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            ActivityCompat.requestPermissions(activity, ANDROID_12_BLE_PERMISSIONS, requestCode);
+        else
+            ActivityCompat.requestPermissions(activity, BLE_PERMISSIONS, requestCode);
+    }
+
+    // For getOrDefault
+    private void askCoarsePermission() {
+        if (SDK_INT >= Build.VERSION_CODES.Q) { // Android 10 (Q) and above, ACCESS_FINE_LOCATION implies COARSE
+            ActivityResultLauncher<String[]> locationPermissionRequest =
+                    registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+                                Boolean fineLocationGranted = result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false);
+                                Boolean coarseLocationGranted = result.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false);
+                                if (fineLocationGranted != null && fineLocationGranted) {
+                                    Toast.makeText(MainActivity.this, "Precise location access granted.", Toast.LENGTH_SHORT).show();
+                                } else if (coarseLocationGranted != null && coarseLocationGranted) {
+                                    Toast.makeText(MainActivity.this, "Only approximate location access granted.", Toast.LENGTH_SHORT).show();
+                                } else {
+                                    Toast.makeText(MainActivity.this, "No location access granted. BLE scanning may not work.", Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                    );
+
+            locationPermissionRequest.launch(new String[]{
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+            });
+        } else { // Below Android 10
+            if (this.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, REQUEST_CODE_COARSE_PERMISSION);
+            }
+        }
+    }
+
+    private void askBluetoothPermission() {
+        if (!mBluetoothAdapter.isEnabled()) {
+            // Check BLUETOOTH_CONNECT permission before launching enable BT intent on Android 12+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "BLUETOOTH_CONNECT permission needed to enable Bluetooth.", Toast.LENGTH_SHORT).show();
+                requestBlePermissions(this, REQUEST_CODE_BLUETOOTH_PERMISSION);
+                return;
+            }
+            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            bluetoothEnableLauncher.launch(enableBtIntent);
+        }
+    }
+
+    // ActivityResultLauncher for enabling Bluetooth (similar to previous code)
+    private ActivityResultLauncher<Intent> bluetoothEnableLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result.getResultCode() == RESULT_OK) {
+                    Toast.makeText(this, "Bluetooth has been enabled.", Toast.LENGTH_SHORT).show();
+                    // Bluetooth is now enabled, you can try starting discovery
+                    startScan(); // Restart scan after Bluetooth enabled
+                } else {
+                    Toast.makeText(this, "Bluetooth not enabled.", Toast.LENGTH_SHORT).show();
+                    runOnUiThread(() -> statusTextView.setText("Status: Bluetooth Disabled"));
+                }
+            }
+    );
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_CODE_COARSE_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "Location Permission Granted!", Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(this, "Location Permission Denied! BLE scanning requires it.", Toast.LENGTH_LONG).show();
+            }
+        } else if (requestCode == REQUEST_CODE_BLUETOOTH_PERMISSION) {
+            boolean allGranted = true;
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+            if (allGranted) {
+                Log.d(TAG, "All Bluetooth permissions granted from onRequestPermissionsResult.");
+                askBluetoothPermission(); // Now that permissions are granted, ask to enable BT if off
+            } else {
+                Toast.makeText(this, "Bluetooth permissions denied. Cannot perform BLE operations.", Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    // --- Chart Setup (retained from previous code) ---
     private void setupChart(LineChart chart, String description) {
         chart.getDescription().setText(description);
         chart.setNoDataText("No data yet.");
@@ -258,7 +627,6 @@ public class MainActivity extends AppCompatActivity {
         chart.invalidate();
     }
 
-    // New method to add accelerometer data entries
     private void addAccelerometerEntry(float x, float y, float z) {
         LineData data = accelerometerChart.getData();
 
@@ -310,292 +678,22 @@ public class MainActivity extends AppCompatActivity {
         return set;
     }
 
-
-    // Create a BroadcastReceiver for ACTION_FOUND.
-    private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            if (BluetoothDevice.ACTION_FOUND.equals(action)) {
-                // Discovery has found a device. Get the BluetoothDevice object and its info from the Intent.
-                BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-                if (device != null) {
-                    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                        return;
-                    }
-                    String deviceName = device.getName() != null ? device.getName() : "Unknown Device";
-                    String deviceHardwareAddress = device.getAddress(); // MAC address
-                    Log.d(TAG, "Device Found: " + deviceName + " - " + deviceHardwareAddress);
-
-                    // Add the device to your list if not already present
-                    String deviceInfo = deviceName + "\n" + deviceHardwareAddress;
-                    if (!deviceList.contains(deviceInfo)) {
-                        deviceList.add(deviceInfo);
-                        deviceListAdapter.notifyDataSetChanged();
-                    }
-                }
-            } else if (BluetoothAdapter.ACTION_DISCOVERY_STARTED.equals(action)) {
-                Log.d(TAG, "Bluetooth Discovery Started.");
-                Toast.makeText(context, "Scanning for devices...", Toast.LENGTH_SHORT).show();
-                deviceList.clear(); // Clear previous list
-                deviceListAdapter.notifyDataSetChanged();
-            } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
-                Log.d(TAG, "Bluetooth Discovery Finished.");
-                Toast.makeText(context, "Scan finished.", Toast.LENGTH_SHORT).show();
-            }
-        }
-    };
-
-    private void startDiscovery() {
-        // Check BLUETOOTH_SCAN permission before starting discovery
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "BLUETOOTH_SCAN permission required to start discovery.", Toast.LENGTH_SHORT).show();
-            requestBluetoothPermissions(); // Request permissions again if missing
-            return;
-        }
-        // For older APIs, ACCESS_FINE_LOCATION is often required for discovery
-        else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Location permission required to start discovery.", Toast.LENGTH_SHORT).show();
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                    REQUEST_BLUETOOTH_PERMISSIONS);
-            return;
-        }
-
-        if (mBluetoothAdapter.isDiscovering()) {
-            // Check BLUETOOTH_SCAN permission again before cancelling discovery (if on S+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "BLUETOOTH_SCAN permission needed to cancel discovery.", Toast.LENGTH_SHORT).show();
-                requestBluetoothPermissions();
-                return;
-            }
-            mBluetoothAdapter.cancelDiscovery();
-            Log.d(TAG, "Cancelling discovery.");
-        }
-
-        if (mBluetoothAdapter.isEnabled()) {
-            Log.d(TAG, "Starting discovery.");
-            mBluetoothAdapter.startDiscovery();
-        } else {
-            // If Bluetooth is not enabled, request to enable it
-            Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
-            // Explicitly check BLUETOOTH_CONNECT permission before launching the activity for result
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "BLUETOOTH_CONNECT permission needed to enable Bluetooth.", Toast.LENGTH_SHORT).show();
-                requestBluetoothPermissions(); // Request permissions again if missing
-                return;
-            }
-            // Use the new Activity Result API
-            enableBtLauncher.launch(enableBtIntent); // <--- HERE IS THE CHANGE
-        }
-    }
-
-    private void connectToDevice(BluetoothDevice device) {
-        if (isConnecting) {
-            Log.d(TAG, "Already attempting to connect. Ignoring new request.");
-            return;
-        }
-
-        if (mBluetoothAdapter == null || device == null) {
-            Log.w(TAG, "BluetoothAdapter not initialized or unspecified device.");
-            return;
-        }
-
-        // Check BLUETOOTH_CONNECT permission
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "BLUETOOTH_CONNECT permission required to connect.", Toast.LENGTH_SHORT).show();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                requestBluetoothPermissions();
-            }
-            return;
-        }
-
-        // We want to directly connect to the device, so we pass in false as the autoConnect parameter.
-        // Also, use TRANSPORT_LE for BLE devices.
-        isConnecting = true;
-        mGatt = device.connectGatt(this, false, mGattCallback, BluetoothDevice.TRANSPORT_LE);
-        Log.d(TAG, "Attempting to create a new GATT connection.");
-        Toast.makeText(this, "Connecting to " + (device.getName() != null ? device.getName() : device.getAddress()) + "...", Toast.LENGTH_SHORT).show();
-    }
-
-    // GATT Callbacks for BLE communication
-    private final BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
-        @Override
-        public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    Log.d(TAG, "Connected to GATT server.");
-                    isConnecting = false;
-                    if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                        return;
-                    }
-                    runOnUiThread(() -> Toast.makeText(MainActivity.this, "Connected to " + (gatt.getDevice().getName() != null ? gatt.getDevice().getName() : gatt.getDevice().getAddress()), Toast.LENGTH_SHORT).show());
-
-                    // Discover services after successful connection
-                    // Requires BLUETOOTH_CONNECT permission
-                    if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                        Log.w(TAG, "BLUETOOTH_CONNECT permission missing for discoverServices.");
-                        runOnUiThread(() -> Toast.makeText(MainActivity.this, "Permission missing for service discovery.", Toast.LENGTH_SHORT).show());
-                        return;
-                    }
-                    gatt.discoverServices();
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    Log.d(TAG, "Disconnected from GATT server.");
-                    isConnecting = false;
-                    runOnUiThread(() -> {
-                        Toast.makeText(MainActivity.this, "Disconnected.", Toast.LENGTH_SHORT).show();
-                        // Clear chart data upon disconnection
-                        accelerometerChart.clear();
-                        dataPointCount = 0;
-                    });
-                    gatt.close(); // Close the GATT client
-                    mGatt = null;
-                }
-            } else {
-                Log.w(TAG, "GATT connection failed with status: " + status);
-                isConnecting = false;
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Connection failed (Status: " + status + ")", Toast.LENGTH_LONG).show());
-                gatt.close();
-                mGatt = null;
-            }
-        }
-
-        @Override
-        public void onServicesDiscovered(BluetoothGatt gatt, int status) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "Services discovered.");
-                List<BluetoothGattService> services = gatt.getServices();
-                for (BluetoothGattService service : services) {
-                    Log.d(TAG, "Service UUID: " + service.getUuid().toString());
-                    if (BLUEIO_SERVICE_UUID.equals(service.getUuid())) {
-                        Log.d(TAG, "Found BlueIO Service!");
-                        // ****** Look for Accelerometer Characteristic here ******
-                        BluetoothGattCharacteristic accelerometerCharacteristic = service.getCharacteristic(ACCELEROMETER_CHAR_UUID);
-                        if (accelerometerCharacteristic != null) {
-                            Log.d(TAG, "Found Accelerometer Characteristic!");
-                            // Enable notifications for this characteristic
-                            setCharacteristicNotification(gatt, accelerometerCharacteristic, true);
-                        } else {
-                            Log.w(TAG, "Accelerometer Characteristic (UUID: " + ACCELEROMETER_CHAR_UUID.toString() + ") not found for BlueIO Service.");
-                        }
-                    }
-                }
-            } else {
-                Log.w(TAG, "onServicesDiscovered received: " + status);
-            }
-        }
-
-        @Override
-        public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                // This callback is for direct reads, not notifications
-                Log.d(TAG, "Characteristic read: " + characteristic.getUuid().toString() + " Value: " + Arrays.toString(characteristic.getValue()));
-            } else {
-                Log.e(TAG, "Characteristic read failed: " + status);
-            }
-        }
-
-        @Override
-        public void onCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
-            // This is where you receive data updates from the characteristic
-            // ****** Check for Accelerometer Characteristic UUID ******
-            if (ACCELEROMETER_CHAR_UUID.equals(characteristic.getUuid())) {
-                byte[] data = characteristic.getValue();
-                if (data != null && data.length >= 6) { // Expecting 3 shorts (2 bytes each) for X, Y, Z
-                    // Parse the 3 short values (X, Y, Z)
-                    // Assuming the data is little-endian as is common in BLE
-                    ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-                    short xRaw = buffer.getShort();
-                    short yRaw = buffer.getShort();
-                    short zRaw = buffer.getShort();
-
-                    // Convert raw short values to float (e.g., if chip sends mg, divide by 1000 for Gs)
-                    // You might need a scaling factor from your chip's documentation.
-                    // For now, let's just cast to float.
-                    float xAccel = (float) xRaw;
-                    float yAccel = (float) yRaw;
-                    float zAccel = (float) zRaw;
-
-                    Log.d(TAG, String.format("Accelerometer: X=%.2f, Y=%.2f, Z=%.2f", xAccel, yAccel, zAccel));
-
-                    // Update UI on the main thread
-                    runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
-                } else {
-                    Log.w(TAG, "Received incomplete or null accelerometer data: " + (data != null ? Arrays.toString(data) : "null"));
-                }
-            }
-        }
-
-        @Override
-        public void onDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "Descriptor written successfully: " + descriptor.getUuid().toString());
-            } else {
-                Log.e(TAG, "Descriptor write failed: " + status);
-            }
-        }
-    };
-
-    /**
-     * Enables or disables notification/indication for a given characteristic.
-     *
-     * @param gatt The GATT client.
-     * @param characteristic The characteristic to enable/disable notifications for.
-     * @param enable True to enable, false to disable.
-     */
-    private void setCharacteristicNotification(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, boolean enable) {
-        // Requires BLUETOOTH_CONNECT permission
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            Log.w(TAG, "BLUETOOTH_CONNECT permission missing for setCharacteristicNotification.");
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Permission missing to enable notifications.", Toast.LENGTH_SHORT).show());
-            return;
-        }
-
-        gatt.setCharacteristicNotification(characteristic, enable);
-
-        // This is essential for notifications/indications to work on most BLE devices.
-        // You need to write to the Client Characteristic Configuration Descriptor (CCCD).
-        BluetoothGattDescriptor descriptor = characteristic.getDescriptor(CCCD_UUID);
-        if (descriptor == null) {
-            Log.e(TAG, "CCCD descriptor not found for characteristic: " + characteristic.getUuid().toString());
-            return;
-        }
-
-        byte[] value;
-        if (enable) {
-            if ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0) {
-                value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
-                Log.d(TAG, "Enabling notifications for " + characteristic.getUuid().toString());
-            } else if ((characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_INDICATE) != 0) {
-                value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
-                Log.d(TAG, "Enabling indications for " + characteristic.getUuid().toString());
-            } else {
-                Log.w(TAG, "Characteristic does not support notifications or indications: " + characteristic.getUuid().toString());
-                return;
-            }
-        } else {
-            value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE;
-            Log.d(TAG, "Disabling notifications for " + characteristic.getUuid().toString());
-        }
-
-        descriptor.setValue(value);
-        gatt.writeDescriptor(descriptor);
-    }
-
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        unregisterReceiver(mReceiver);
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-            return;
+        // Stop scanning if active
+        if (mLEScanner != null && mBluetoothAdapter.isEnabled()) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                mLEScanner.stopScan(mScanCallback);
+            }
         }
-
-        if (mBluetoothAdapter != null && mBluetoothAdapter.isDiscovering()) {
-            mBluetoothAdapter.cancelDiscovery();
+        // Close GATT connection
+        if (mBluetoothGatt != null) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                mBluetoothGatt.close();
+            }
+            mBluetoothGatt = null;
         }
+        mHandler.removeCallbacksAndMessages(null); // Clean up any pending handler messages
     }
 }
