@@ -259,35 +259,63 @@ public class MainActivity extends AppCompatActivity {
             if (ACCELEROMETER_CHAR_UUID.equals(characteristic.getUuid())) {
                 byte[] data = characteristic.getValue();
 
-                // The data format is a 16-byte payload.
-                if (data != null && data.length >= 16) {
+                // Check for a valid data packet.
+                if (data != null && data.length > 0) {
+                    // Log the entire raw data packet to see its structure.
+                    if(Arrays.toString(data).contains("1") || Arrays.toString(data).contains("-1")) {
+                        //Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
+                    }
+
                     // Use a ByteBuffer to parse the data safely with the correct byte order.
                     ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
 
-                    // Skip the first 8 bytes of the payload.
-                    buffer.position(8);
+                    // --- Parsing Logic ---
+                    // Try different starting positions based on your logs.
+                    // The logs show data at different offsets.
+                    // Let's assume the data is at a fixed position, and we need to find it.
 
-                    // Read the three 16-bit signed integers (shorts) for each axis in the correct order.
-                    // The data seems to be in Y, Z, X order based on your observations.
-                    short yRaw = buffer.getShort();
-                    short zRaw = buffer.getShort();
-                    short xRaw = buffer.getShort();
+                    // The accelerometer data is three 16-bit signed integers (shorts).
+                    // A common pattern is for the data to be at a fixed offset.
 
-                    // The scale factor for the ICM-20948 depends on the configured range.
-                    // A common value for a ±2g range is 16384.0f, which aligns with your previous working code.
-                    float scaleFactor = 16384.0f;
+                    // Let's test a couple of common starting positions.
+                    int startPosition = 6; // Based on your earlier code.
 
-                    float xAccel = (float) xRaw / scaleFactor;
-                    float yAccel = (float) yRaw / scaleFactor;
-                    float zAccel = (float) zRaw / scaleFactor;
+                    if (data.length - startPosition >= 6) {
+                        buffer.position(startPosition);
 
-                    Log.d(TAG, String.format("Parsed Data - X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
-                    Log.d(TAG, String.format("Processed Accel: X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
+                        short yRaw = buffer.getShort();
+                        short zRaw = buffer.getShort();
+                        short xRaw = buffer.getShort();
 
-                    // Update UI on the chart
-                    runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
+                        // Check if the data is all zeros before processing.
+                        if (xRaw == 0 && yRaw == 0 && zRaw == 0) {
+                            //Log.d(TAG, "Skipping all-zero data packet.");
+                            return; // Ignore this packet and wait for the next one.
+                        }
+
+                        // Apply the scale factor to convert to G's.
+                        float scaleFactor = 16384.0f; // Assumes a +/-2g range.
+
+                        float xAccel = (float) xRaw / scaleFactor;
+                        float yAccel = (float) yRaw / scaleFactor;
+                        float zAccel = (float) zRaw / scaleFactor;
+
+                        // Log the parsed values for verification.
+                        //Log.d(TAG, String.format("Parsed Data @pos %d - X Raw: %d, Y Raw: %d, Z Raw: %d", startPosition, xRaw, yRaw, zRaw));
+                        //Log.d(TAG, String.format("Processed Accel: X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
+
+                        if (xAccel != 0 || yAccel != 0 || zAccel != 0) {
+                            Log.d(TAG, "AAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+                            Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
+                        }
+
+                        // Update the UI.
+                        runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
+                    } else {
+                        Log.w(TAG, "Packet too short to contain accelerometer data at position " + startPosition);
+                    }
                 } else {
-                    Log.w(TAG, "Received incomplete or null accelerometer data: " + (data != null ? Arrays.toString(data) : "null"));
+                    Log.w(TAG, "Received empty or null data packet.");
                 }
             }
         }
