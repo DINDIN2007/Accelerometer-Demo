@@ -44,6 +44,7 @@ import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet;
 
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -607,56 +608,52 @@ public class MainActivity extends AppCompatActivity {
         gatt.writeDescriptor(descriptor);
     }
 
+    private int counter = 0;
+
     public void mOnCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
-        // Makes sure that the device is actually receiving data from the correct characteristic (in this case Raw data)
         if (ACCELEROMETER_CHAR_UUID.equals(characteristic.getUuid())) {
-            // Get data in byte format
             byte[] data = characteristic.getValue();
 
-            // Check if the data packet is valid
             if (data != null && data.length > 0) {
-                // Log the entire raw data packet to see its structure when BlueIOThingy is accelerating.
-                if (Arrays.toString(data).contains("1") || Arrays.toString(data).contains("-1")) {
-                    //Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
-                }
+                Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
 
-                // Use a ByteBuffer to parse the data safely with the correct byte order.
-                ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
-
-                // The accelerometer data from the ICM-20948 sensor chip is three 16-bit signed integers (shorts)
-                int startPosition = 6; // Adjust to get correct offset (data includes info about other measurements too)
+                // Adjust this to the correct offset in your BLE packet
+                final int startPosition = 0; // change if your accel data is not at the start
 
                 if (data.length - startPosition >= 6) {
-                    buffer.position(startPosition);
+                    int xRaw = BytesToInt(data[6],data[7]);
+                    int yRaw = BytesToInt(data[8],data[9]);
+                    int zRaw = BytesToInt(data[10],data[11]);
 
-                    // Extract data for each of the axis
-                    short yRaw = buffer.getShort();
-                    short zRaw = buffer.getShort();
-                    short xRaw = buffer.getShort();
+                    // Determine full-scale range (FSR) in g. Change if configured differently.
+                    float accelFSR = 2.0f; // ±2g
+                    float scaleFactor = 32768.0f;
 
-                    // Apply scale factor to convert to G unit
-                    float scaleFactor = 16384.0f; // For ±2g range
+                    float xAccel = (accelFSR * xRaw) / scaleFactor;
+                    float yAccel = (accelFSR * yRaw) / scaleFactor;
+                    float zAccel = (accelFSR * zRaw) / scaleFactor;
 
-                    float xAccel = (float) xRaw / scaleFactor;
-                    float yAccel = (float) yRaw / scaleFactor;
-                    float zAccel = (float) zRaw / scaleFactor;
+                    Log.d(TAG, String.format("X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
+                    Log.d(TAG, String.format("Accel (g): X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
 
-                        /* Log the parsed values for debugging
-                        Log.d(TAG, String.format("Parsed Data @pos %d - X Raw: %d, Y Raw: %d, Z Raw: %d", startPosition, xRaw, yRaw, zRaw));
-                        Log.d(TAG, String.format("Processed Accel: X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
+                    counter += 1;
+                    if (counter%20==0) {
+                        addAccelerometerEntry(xAccel, yAccel, zAccel);
+                    }
 
-                        if (xAccel != 0 || yAccel != 0 || zAccel != 0) {
-                            Log.d(TAG, "AAAAAAAAAAAAAAAAAAAAAAAAAAAA");
-                            Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
-                        } */
-
-                    // Update the UI of the chart
-                    runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
+                    //runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
+                } else {
+                    Log.w(TAG, "Packet too short for accelerometer data. Length: " + data.length);
                 }
-                else Log.w(TAG, "Packet too short to contain accelerometer data at position " + startPosition);
+            } else {
+                Log.w(TAG, "Received empty or null data packet.");
             }
-            else Log.w(TAG, "Received empty or null data packet.");
         }
+    }
+
+    public static short BytesToInt(byte byte1, byte byte2) {
+        byte[] bytes = {byte2,byte1};
+        return new BigInteger(bytes).shortValue();
     }
 
     public void mOnDescriptorWrite(BluetoothGatt gatt, BluetoothGattDescriptor descriptor, int status) {
