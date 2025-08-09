@@ -25,9 +25,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.ParcelUuid;
 import android.util.Log;
+import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.ToggleButton;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -100,6 +102,8 @@ public class MainActivity extends AppCompatActivity {
     // UI elements in the app
     private TextView statusTextView;
     private LineChart accelerometerChart;
+    private Button connectButton;
+    private ToggleButton showXAxisButton, showYAxisButton, showZAxisButton;
 
     // Chart Data
     private int dataPointCount = 0;
@@ -141,8 +145,18 @@ public class MainActivity extends AppCompatActivity {
         accelerometerChart = findViewById(R.id.accelerometerChart);
         setupChart(accelerometerChart, "Accelerometer Data (X, Y, Z)");
 
-        Button btnStartScan = findViewById(R.id.btnStartDiscovery); // Use your existing button
-        btnStartScan.setOnClickListener(v -> startScan()); // Call the new startScan method
+        showXAxisButton = (ToggleButton) findViewById(R.id.showXAxisButton);
+        showYAxisButton = (ToggleButton) findViewById(R.id.showYAxisButton);
+        showZAxisButton = (ToggleButton) findViewById(R.id.showZAxisButton);
+
+        connectButton = findViewById(R.id.btnStartDiscovery); // Use your existing button
+        connectButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                connectButton.setText("Disconnect...");
+                startScan();
+            }
+        });
 
         // Permission handling setup (from BlueIOThingy demo code)
         requestMultiplePermissionsContract = new ActivityResultContracts.RequestMultiplePermissions();
@@ -331,6 +345,8 @@ public class MainActivity extends AppCompatActivity {
                         Toast.makeText(MainActivity.this, "Device " + targetDeviceName + "not found.", Toast.LENGTH_SHORT).show();
                     });
                 }
+
+
             }
         }, SCAN_PERIOD);
 
@@ -615,7 +631,7 @@ public class MainActivity extends AppCompatActivity {
             byte[] data = characteristic.getValue();
 
             if (data != null && data.length > 0) {
-                Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
+                // Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
 
                 // Adjust this to the correct offset in your BLE packet
                 final int startPosition = 0; // change if your accel data is not at the start
@@ -633,11 +649,14 @@ public class MainActivity extends AppCompatActivity {
                     float yAccel = (accelFSR * yRaw) / scaleFactor;
                     float zAccel = (accelFSR * zRaw) / scaleFactor;
 
-                    Log.d(TAG, String.format("X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
-                    Log.d(TAG, String.format("Accel (g): X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
+                    // Log.d(TAG, String.format("X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
+                    // Log.d(TAG, String.format("Accel (g): X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
 
                     counter += 1;
-                    if (counter%20==0) {
+                    if (counter % 20 == 0) {
+                        if (!(xAccel == 0 && yAccel == 0 && zAccel == 0)) {
+                            Log.d(TAG, "AA : " + xAccel + ", " + yAccel + ", " + zAccel);
+                        }
                         addAccelerometerEntry(xAccel, yAccel, zAccel);
                     }
 
@@ -705,22 +724,32 @@ public class MainActivity extends AppCompatActivity {
             ILineDataSet setZ = data.getDataSetByIndex(2);
 
             // Create datasets if they don't exist
-            if (setX == null) {
-                setX = createDataSet("X-Axis", getResources().getColor(android.R.color.holo_red_light));
-                data.addDataSet(setX);
+            if (showXAxisButton.isChecked()) {
+                if (setX == null) {
+                    setX = createDataSet("X-Axis", getResources().getColor(android.R.color.holo_red_light));
+                    data.addDataSet(setX);
+                }
+                data.addEntry(new Entry(dataPointCount, x), 0); // Add to X-axis dataset
             }
-            if (setY == null) {
-                setY = createDataSet("Y-Axis", getResources().getColor(android.R.color.holo_green_light));
-                data.addDataSet(setY);
-            }
-            if (setZ == null) {
-                setZ = createDataSet("Z-Axis", getResources().getColor(android.R.color.holo_blue_light));
-                data.addDataSet(setZ);
-            }
+            else if (setX != null) data.removeDataSet(setX);
 
-            data.addEntry(new Entry(dataPointCount, x), 0); // Add to X-axis dataset
-            data.addEntry(new Entry(dataPointCount, y), 1); // Add to Y-axis dataset
-            data.addEntry(new Entry(dataPointCount, z), 2); // Add to Z-axis dataset
+            if (showYAxisButton.isChecked()) {
+                if (setY == null && showYAxisButton.isChecked()) {
+                    setY = createDataSet("Y-Axis", getResources().getColor(android.R.color.holo_green_light));
+                    data.addDataSet(setY);
+                }
+                data.addEntry(new Entry(dataPointCount, y), 1); // Add to Y-axis dataset
+            }
+            else if (setY != null) data.removeDataSet(setY);
+
+            if (showZAxisButton.isChecked()) {
+                if (setZ == null && showZAxisButton.isChecked()) {
+                    setZ = createDataSet("Z-Axis", getResources().getColor(android.R.color.holo_blue_light));
+                    data.addDataSet(setZ);
+                }
+                data.addEntry(new Entry(dataPointCount, z), 2); // Add to Z-axis dataset
+            }
+            else if (setY != null) data.removeDataSet(setZ);
 
             data.notifyDataChanged();
 
