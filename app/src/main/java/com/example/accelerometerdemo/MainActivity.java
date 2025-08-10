@@ -26,7 +26,9 @@ import android.os.Handler;
 import android.os.ParcelUuid;
 import android.util.Log;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ToggleButton;
@@ -103,6 +105,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView statusTextView;
     private LineChart accelerometerChart;
     private Button connectButton;
+    private Spinner chartOptionsDropDown;
     private ToggleButton showXAxisButton, showYAxisButton, showZAxisButton;
 
     // Chart Data
@@ -142,6 +145,12 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize UI elements
         statusTextView = findViewById(R.id.statusTextView); // You'll need to add this to your layout
+        chartOptionsDropDown = findViewById(R.id.chartOptionsDropDown);
+        final List<String> states = Arrays.asList("Accelerometer (g)", "Force Meter (N)");
+        ArrayAdapter adapter = new ArrayAdapter(getApplicationContext(), R.layout.custom_spinner_item, states);
+        adapter.setDropDownViewResource(R.layout.custom_spinner_item);
+        chartOptionsDropDown.setAdapter(adapter);
+
         accelerometerChart = findViewById(R.id.accelerometerChart);
         setupChart(accelerometerChart, "Accelerometer Data (X, Y, Z)");
 
@@ -153,8 +162,14 @@ public class MainActivity extends AppCompatActivity {
         connectButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                connectButton.setText("Disconnect...");
-                startScan();
+                if (mBluetoothGatt != null) {
+                    // A connection exists, so disconnect
+                    disconnectFromDevice();
+                } else {
+                    // No connection, start the search/connect process
+                    connectButton.setText("Searching...");
+                    startScan();
+                }
             }
         });
 
@@ -461,6 +476,7 @@ public class MainActivity extends AppCompatActivity {
                             }
                             statusTextView.setText("Status: Connected to " + (gatt.getDevice().getName() != null ? gatt.getDevice().getName() : gatt.getDevice().getAddress()));
                             Toast.makeText(MainActivity.this, "Connected.", Toast.LENGTH_SHORT).show();
+                            connectButton.setText("Disconnect");
                         });
 
                         // Discover services after successful connection
@@ -488,6 +504,7 @@ public class MainActivity extends AppCompatActivity {
 
                             // Restart scan here if auto-reconnect is needed
                             // scanBluetoothDevices(true);
+                            connectButton.setText("Search for Device");
                         });
 
                         // Close the GATT client
@@ -686,6 +703,30 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         else Log.e(TAG, "Descriptor write failed: " + status);
+    }
+
+    /*████╗░██╗░██████╗░█████╗░░█████╗░███╗░░██╗███╗░░██╗███████╗░█████╗░████████╗
+    ██╔══██╗██║██╔════╝██╔══██╗██╔══██╗████╗░██║████╗░██║██╔════╝██╔══██╗╚══██╔══╝
+    ██║░░██║██║╚█████╗░██║░░╚═╝██║░░██║██╔██╗██║██╔██╗██║█████╗░░██║░░╚═╝░░░██║░░░
+    ██║░░██║██║░╚═══██╗██║░░██╗██║░░██║██║╚████║██║╚████║██╔══╝░░██║░░██╗░░░██║░░░
+    ██████╔╝██║██████╔╝╚█████╔╝╚█████╔╝██║░╚███║██║░╚███║███████╗╚█████╔╝░░░██║░░░
+    ╚═════╝░╚═╝╚═════╝░░╚════╝░░╚════╝░╚═╝░░╚══╝╚═╝░░╚══╝╚══════╝░╚════╝░░░░╚═╝░*/
+
+    @SuppressLint("MissingPermission")
+    private void disconnectFromDevice() {
+        if (mBluetoothAdapter == null || mBluetoothGatt == null) {
+            Log.w(TAG, "BluetoothAdapter not initialized or not connected.");
+            return;
+        }
+
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            Log.w(TAG, "BLUETOOTH_CONNECT permission missing for disconnect.");
+            return;
+        }
+
+        Log.d(TAG, "Disconnecting from GATT server.");
+        // This call will trigger the onConnectionStateChange callback.
+        mBluetoothGatt.disconnect();
     }
 
     /*████╗░██╗░░██╗░█████╗░██████╗░████████╗
