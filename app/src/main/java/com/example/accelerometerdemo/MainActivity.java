@@ -5,6 +5,7 @@ import static android.os.Build.VERSION.SDK_INT;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Dialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -28,6 +29,7 @@ import android.util.Log;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -48,6 +50,9 @@ import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet;
 
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -102,14 +107,21 @@ public class MainActivity extends AppCompatActivity {
     private BluetoothGattCharacteristic mAccelerometerCharacteristic;
 
     // UI elements in the app
+    private LinearLayout chartLayout;
     private TextView statusTextView;
     private LineChart accelerometerChart;
     private Button connectButton;
-    private Spinner chartOptionsDropDown;
+    private Spinner chartOptionsDropDown, weightUnitDropDown;
     private ToggleButton showXAxisButton, showYAxisButton, showZAxisButton;
 
     // Chart Data
     private int dataPointCount = 0;
+
+    // Data Saving Variables
+    private Button recordButton, resultButton;
+    private boolean isRecording = false;
+    private final String filename = "accelerometer_data.txt";
+    private FileOutputStream fileOutputStream;
 
 
     /*█████╗████████╗░█████╗░██████╗░████████╗
@@ -144,6 +156,9 @@ public class MainActivity extends AppCompatActivity {
         mLEScanner = mBluetoothAdapter.getBluetoothLeScanner();
 
         // Initialize UI elements
+        chartLayout = findViewById(R.id.chartLayout);
+        chartLayout.setVisibility(View.GONE);
+
         statusTextView = findViewById(R.id.statusTextView); // You'll need to add this to your layout
         chartOptionsDropDown = findViewById(R.id.chartOptionsDropDown);
         final List<String> states = Arrays.asList("Accelerometer (g)", "Force Meter (N)");
@@ -154,23 +169,46 @@ public class MainActivity extends AppCompatActivity {
         accelerometerChart = findViewById(R.id.accelerometerChart);
         setupChart(accelerometerChart, "Accelerometer Data (X, Y, Z)");
 
-        showXAxisButton = (ToggleButton) findViewById(R.id.showXAxisButton);
-        showYAxisButton = (ToggleButton) findViewById(R.id.showYAxisButton);
-        showZAxisButton = (ToggleButton) findViewById(R.id.showZAxisButton);
+        showXAxisButton = findViewById(R.id.showXAxisButton);
+        showYAxisButton = findViewById(R.id.showYAxisButton);
+        showZAxisButton = findViewById(R.id.showZAxisButton);
 
         connectButton = findViewById(R.id.btnStartDiscovery); // Use your existing button
-        connectButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (mBluetoothGatt != null) {
-                    // A connection exists, so disconnect
-                    disconnectFromDevice();
-                } else {
-                    // No connection, start the search/connect process
-                    connectButton.setText("Searching...");
-                    startScan();
-                }
+        connectButton.setOnClickListener(v -> {
+            if (mBluetoothGatt != null) {
+                // A connection exists, so disconnect
+                disconnectFromDevice();
+            } else {
+                // No connection, start the search/connect process
+                connectButton.setText("Searching...");
+                startScan();
             }
+        });
+
+        weightUnitDropDown = findViewById(R.id.weightUnit);
+        final List<String> units = Arrays.asList("kg", "lb");
+        ArrayAdapter unitAdapter = new ArrayAdapter(getApplicationContext(), R.layout.custom_spinner_item, units);
+        unitAdapter.setDropDownViewResource(R.layout.custom_spinner_item);
+        weightUnitDropDown.setAdapter(unitAdapter);
+
+        recordButton = findViewById(R.id.recordButton);
+        recordButton.setOnClickListener(v -> {
+            if (isRecording) {
+                closeFileOutputStream();
+                recordButton.setText("Record \uD83D\uDD34");
+                recordButton.setBackgroundTintList(getResources().getColorStateList(R.color.lightblue, null));
+            }
+            else {
+                getFileOutputStream();
+                recordButton.setText("Recording... Press again to pause ||");
+                recordButton.setBackgroundTintList(getResources().getColorStateList(R.color.lightgray, null));
+            }
+            isRecording = !isRecording;
+        });
+
+        resultButton = findViewById(R.id.exportButton);
+        resultButton.setOnClickListener(v -> {
+            showDialog();
         });
 
         // Permission handling setup (from BlueIOThingy demo code)
@@ -181,12 +219,12 @@ public class MainActivity extends AppCompatActivity {
             // Check if all necessary permissions are granted (Seperated by asking based on build version of device
             boolean allGranted = true;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (!isGranted.getOrDefault(Manifest.permission.BLUETOOTH_SCAN, false) || !isGranted.getOrDefault(Manifest.permission.BLUETOOTH_CONNECT, false)) {
+                if (Boolean.FALSE.equals(isGranted.getOrDefault(Manifest.permission.BLUETOOTH_SCAN, false)) || Boolean.FALSE.equals(isGranted.getOrDefault(Manifest.permission.BLUETOOTH_CONNECT, false))) {
                     allGranted = false;
                 }
             }
             else {
-                if (!isGranted.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false)) { // Coarse is usually enough for pre-S scanning
+                if (Boolean.FALSE.equals(isGranted.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false))) { // Coarse is usually enough for pre-S scanning
                     allGranted = false;
                 }
             }
@@ -205,6 +243,10 @@ public class MainActivity extends AppCompatActivity {
         // Request permissions on startup
         requestBlePermissions(this, REQUEST_CODE_BLUETOOTH_PERMISSION);
         askCoarsePermission();
+
+        // Reset the data saved from previous performances on the app
+        boolean deleted = deleteFile(filename);
+        Log.d(TAG, (deleted) ? "Successfully deleted file: " + filename : "Failed to delete file: " + filename);
     }
 
     @Override
@@ -477,6 +519,7 @@ public class MainActivity extends AppCompatActivity {
                             statusTextView.setText("Status: Connected to " + (gatt.getDevice().getName() != null ? gatt.getDevice().getName() : gatt.getDevice().getAddress()));
                             Toast.makeText(MainActivity.this, "Connected.", Toast.LENGTH_SHORT).show();
                             connectButton.setText("Disconnect");
+                            chartLayout.setVisibility(View.VISIBLE);
                         });
 
                         // Discover services after successful connection
@@ -654,8 +697,8 @@ public class MainActivity extends AppCompatActivity {
                 final int startPosition = 0; // change if your accel data is not at the start
 
                 if (data.length - startPosition >= 6) {
-                    int xRaw = BytesToInt(data[6],data[7]);
-                    int yRaw = BytesToInt(data[8],data[9]);
+                    int yRaw = BytesToInt(data[6],data[7]);
+                    int xRaw = BytesToInt(data[8],data[9]);
                     int zRaw = BytesToInt(data[10],data[11]);
 
                     // Determine full-scale range (FSR) in g. Change if configured differently.
@@ -672,7 +715,13 @@ public class MainActivity extends AppCompatActivity {
                     counter += 1;
                     if (counter % 20 == 0) {
                         if (!(xAccel == 0 && yAccel == 0 && zAccel == 0)) {
-                            Log.d(TAG, "AA : " + xAccel + ", " + yAccel + ", " + zAccel);
+                            Log.d(TAG, "AA : " + xRaw + ", " + yRaw + ", " + zRaw);
+
+                            for (int i = 0; i < data.length - 1; i += 2) {
+                                short rawValue = BytesToInt(data[i], data[i+1]);
+                                float scaledValue = (2.0f * rawValue) / 32768.0f; // Assuming +/-2g scale
+                                Log.d(TAG, String.format("Offset %d: Raw=%d, Scaled=%.4f", i, rawValue, scaledValue));
+                            }
                         }
                         addAccelerometerEntry(xAccel, yAccel, zAccel);
                     }
@@ -727,6 +776,9 @@ public class MainActivity extends AppCompatActivity {
         Log.d(TAG, "Disconnecting from GATT server.");
         // This call will trigger the onConnectionStateChange callback.
         mBluetoothGatt.disconnect();
+        runOnUiThread(() -> {
+            chartLayout.setVisibility(View.GONE);
+        });
     }
 
     /*████╗░██╗░░██╗░█████╗░██████╗░████████╗
@@ -803,6 +855,12 @@ public class MainActivity extends AppCompatActivity {
             // Move to the latest entry
             accelerometerChart.moveViewToX(data.getEntryCount());
 
+            // Add to data entry if the user decides to record it
+            if (isRecording) {
+                writeDataToFile(x, y, z, dataPointCount);
+            }
+
+            // Increase coordinate on x-axis of chart
             dataPointCount++;
         }
     }
@@ -818,4 +876,49 @@ public class MainActivity extends AppCompatActivity {
         return set;
     }
 
+    /*████╗░███████╗░█████╗░░█████╗░██████╗░██████╗░
+    ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔══██╗
+    ██████╔╝█████╗░░██║░░╚═╝██║░░██║██████╔╝██║░░██║
+    ██╔══██╗██╔══╝░░██║░░██╗██║░░██║██╔══██╗██║░░██║
+    ██║░░██║███████╗╚█████╔╝╚█████╔╝██║░░██║██████╔╝
+    ╚═╝░░╚═╝╚══════╝░╚════╝░░╚════╝░╚═╝░░╚═╝╚═════*/
+
+    // Getting a FileOutputStream
+    public void getFileOutputStream() {
+        try {
+            fileOutputStream = openFileOutput(filename, Context.MODE_PRIVATE);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Read the accelerometer data from the device's private file
+    public void readDataFromFile() {
+    }
+
+    // Write a log of the current accelerometer data into the device's private file
+    public void writeDataToFile(float x, float y, float z, int time) {
+        String data = time + " : (" + x + "," + y + "," + z + ")";
+        try {
+            fileOutputStream.write(data.getBytes());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Close file output stream
+    public void closeFileOutputStream() {
+        try {
+            if (fileOutputStream != null) fileOutputStream.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Show popup screen when done
+    private void showDialog() {
+        Dialog dialog = new Dialog(this);
+        dialog.setContentView(R.layout.download_popup);
+        dialog.show();
+    }
 }
