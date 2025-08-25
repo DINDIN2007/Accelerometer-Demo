@@ -23,6 +23,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.ParcelUuid;
 import android.util.Log;
@@ -50,9 +51,13 @@ import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -69,7 +74,11 @@ public class MainActivity extends AppCompatActivity {
     private static final String BLUEIO_UUID_SERVICE = "ef680400-9b35-4933-9b10-52ffa9740042";
     private static final String ACCELEROMETER_CHAR_UUID_STRING = "ef680406-9b35-4933-9b10-52ffa9740042"; // Raw data characteristic
     private static final UUID ACCELEROMETER_CHAR_UUID = UUID.fromString(ACCELEROMETER_CHAR_UUID_STRING);
+    private static final String MOTION_CONFIG_CHAR_UUID_STRING = "ef680401-9b35-4933-9b10-52ffa9740042";
+    private static final UUID MOTION_CONFIG_CHAR_UUID = UUID.fromString(MOTION_CONFIG_CHAR_UUID_STRING);
     private static final UUID CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb"); // Standard CCCD
+    private static final float accelFSR = 2.0f; // ±2g
+    private static final float scaleFactor = 32768.0f;
 
     // Bluetooth Variables
     private BluetoothManager mBluetoothManager; // Used to access BluetoothAdapter and manage Bluetooth Profiles
@@ -120,8 +129,13 @@ public class MainActivity extends AppCompatActivity {
     // Data Saving Variables
     private Button recordButton, resultButton;
     private boolean isRecording = false;
-    private final String filename = "accelerometer_data.txt";
+    private final String filename = "accelerometer_data.csv";
     private FileOutputStream fileOutputStream;
+    private long lastLoggedTime = 0;
+    private float xSum = 0;
+    private float ySum = 0;
+    private float zSum = 0;
+    private int dataCount = 0;
 
 
     /*█████╗████████╗░█████╗░██████╗░████████╗
@@ -586,6 +600,7 @@ public class MainActivity extends AppCompatActivity {
         ██████╔╝██║██████╔╝╚█████╔╝╚█████╔╝░░╚██╔╝░░███████╗██║░░██║░░░██║░░░
         ╚═════╝░╚═╝╚═════╝░░╚════╝░░╚════╝░░░░╚═╝░░░╚══════╝╚═╝░░╚═╝░░░╚═╝░*/
 
+        @SuppressLint("MissingPermission")
         @Override
         public void onServicesDiscovered(BluetoothGatt gatt, int status) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -599,7 +614,30 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
 
-                // If that service exist, find its characteristics
+                // Get the configuration characteristic
+                BluetoothGattCharacteristic configCharacteristic = mBlueIOService.getCharacteristic(MOTION_CONFIG_CHAR_UUID);
+                if (configCharacteristic == null) {
+                    Log.d(TAG, "Motion Configuration Characteristic not found.");
+                    return;
+                }
+
+                // Write the command to turn on the sensors
+                Log.d(TAG, "Found Motion Config Characteristic. Writing configuration...");
+
+                /* COMMAND STRUCTURE
+                   Feature to Configure             |   Op-code (Hex)   | Value to Send
+                   Operating Mode                   |       0x01        | 0x01 (Wake-on-Motion)
+                   Accelerometer Sample Rate        |       0x03        | A value from about 5 to 1000 Hz (in hex)
+                   Accelerometer Full-Scale Range   |       0x00        | 0x00 (±2g), 0x01 (±4g), 0x02 (±8g), 0x03 (±16g)
+                   Gyroscope Sample Rate            |       0.07        | A value from about 5 to 1000 Hz (in hex)
+                   etc...
+                */
+
+                configCharacteristic.setValue(new byte[]{0x01, 0x03, 0x00, 0x32, 0x04, 0x02, 0x08, 0x00, 0x0A, (byte) 0xC8, 0x00});
+                if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return;
+                gatt.writeCharacteristic(configCharacteristic);
+
+                /* If that service exist, find its characteristics
                 mAccelerometerCharacteristic = mBlueIOService.getCharacteristic(ACCELEROMETER_CHAR_UUID);
                 if (mAccelerometerCharacteristic != null) {
                     Log.d(TAG, "Found Accelerometer Characteristic!");
@@ -610,10 +648,30 @@ public class MainActivity extends AppCompatActivity {
                 else {
                     Log.w(TAG, "Accelerometer Characteristic (UUID: " + ACCELEROMETER_CHAR_UUID_STRING + ") not found.");
                     runOnUiThread(() -> Toast.makeText(MainActivity.this, "Accelerometer characteristic not found.", Toast.LENGTH_LONG).show());
-                }
+                }*/
             }
             // In the case the GATT connection failed, send a warning message in console
             else Log.w(TAG, "onServicesDiscovered received: " + status);
+        }
+
+        @Override
+        public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+            super.onCharacteristicWrite(gatt, characteristic, status);
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "Successfully wrote to config characteristic: " + characteristic.getUuid());
+
+                // Now that the sensor is configured and turned on, we can enable notifications
+                // on the raw data characteristic.
+                mAccelerometerCharacteristic = mBlueIOService.getCharacteristic(ACCELEROMETER_CHAR_UUID);
+                if (mAccelerometerCharacteristic != null) {
+                    Log.d(TAG, "Enabling notifications for Raw Accelerometer Data.");
+                    setCharacteristicNotification(gatt, mAccelerometerCharacteristic, true);
+                } else {
+                    Log.w(TAG, "Raw Accelerometer characteristic not found after config write.");
+                }
+            } else {
+                Log.e(TAG, "Failed to write to config characteristic. Status: " + status);
+            }
         }
 
         @Override
@@ -684,51 +742,37 @@ public class MainActivity extends AppCompatActivity {
         gatt.writeDescriptor(descriptor);
     }
 
-    private int counter = 0;
-
     public void mOnCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
         if (ACCELEROMETER_CHAR_UUID.equals(characteristic.getUuid())) {
             byte[] data = characteristic.getValue();
 
-            if (data != null && data.length > 0) {
-                // Log.d(TAG, "Raw Data Packet (" + data.length + " bytes): " + Arrays.toString(data));
+            if (data != null && data.length >= 18) {
+                int xRaw = BytesToInt(data[0],data[1]);
+                int yRaw = BytesToInt(data[2],data[3]);
+                int zRaw = BytesToInt(data[4],data[5]);
 
-                // Adjust this to the correct offset in your BLE packet
-                final int startPosition = 0; // change if your accel data is not at the start
+                float xAccel = xRaw / 256.0f;
+                float yAccel = yRaw / 256.0f;
+                float zAccel = zRaw / 256.0f;
 
-                if (data.length - startPosition >= 6) {
-                    int yRaw = BytesToInt(data[6],data[7]);
-                    int xRaw = BytesToInt(data[8],data[9]);
-                    int zRaw = BytesToInt(data[10],data[11]);
+                long currentTime = System.currentTimeMillis();
 
-                    // Determine full-scale range (FSR) in g. Change if configured differently.
-                    float accelFSR = 2.0f; // ±2g
-                    float scaleFactor = 32768.0f;
+                xSum += xAccel;
+                ySum += yAccel;
+                zSum += zAccel;
+                dataCount++;
 
-                    float xAccel = (accelFSR * xRaw) / scaleFactor;
-                    float yAccel = (accelFSR * yRaw) / scaleFactor;
-                    float zAccel = (accelFSR * zRaw) / scaleFactor;
-
+                if (currentTime - lastLoggedTime >= 10) {
                     // Log.d(TAG, String.format("X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
                     // Log.d(TAG, String.format("Accel (g): X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
+                    addAccelerometerEntry(xSum / dataCount, ySum / dataCount, zSum / dataCount);
 
-                    counter += 1;
-                    if (counter % 20 == 0) {
-                        if (!(xAccel == 0 && yAccel == 0 && zAccel == 0)) {
-                            Log.d(TAG, "AA : " + xRaw + ", " + yRaw + ", " + zRaw);
-
-                            for (int i = 0; i < data.length - 1; i += 2) {
-                                short rawValue = BytesToInt(data[i], data[i+1]);
-                                float scaledValue = (2.0f * rawValue) / 32768.0f; // Assuming +/-2g scale
-                                Log.d(TAG, String.format("Offset %d: Raw=%d, Scaled=%.4f", i, rawValue, scaledValue));
-                            }
-                        }
-                        addAccelerometerEntry(xAccel, yAccel, zAccel);
-                    }
-
-                    //runOnUiThread(() -> addAccelerometerEntry(xAccel, yAccel, zAccel));
-                } else {
-                    Log.w(TAG, "Packet too short for accelerometer data. Length: " + data.length);
+                    // Reset for next interval
+                    xSum = 0;
+                    ySum = 0;
+                    zSum = 0;
+                    dataCount = 0;
+                    lastLoggedTime = currentTime; // Update the last logged time
                 }
             } else {
                 Log.w(TAG, "Received empty or null data packet.");
@@ -803,6 +847,10 @@ public class MainActivity extends AppCompatActivity {
         chart.getAxisLeft().setDrawGridLines(false);
         chart.getAxisRight().setEnabled(false); // Disable right axis if not needed
 
+        // Set axis titles
+        chart.getDescription().setText("X-axis: Time (ms) | Y-axis: Acceleration (g)");
+        chart.getXAxis().setValueFormatter(new TimeValueFormatter());
+
         // Add initial empty data
         chart.setData(new LineData());
         chart.invalidate();
@@ -812,41 +860,32 @@ public class MainActivity extends AppCompatActivity {
         LineData data = accelerometerChart.getData();
 
         if (data != null) {
+            // Ensure datasets for all three axes are created and available from the start
+            if (data.getDataSetCount() == 0) {
+                data.addDataSet(createDataSet("X-Axis", getResources().getColor(android.R.color.holo_red_light)));
+                data.addDataSet(createDataSet("Y-Axis", getResources().getColor(android.R.color.holo_green_light)));
+                data.addDataSet(createDataSet("Z-Axis", getResources().getColor(android.R.color.holo_blue_light)));
+            }
+
             ILineDataSet setX = data.getDataSetByIndex(0);
             ILineDataSet setY = data.getDataSetByIndex(1);
             ILineDataSet setZ = data.getDataSetByIndex(2);
 
-            // Create datasets if they don't exist
-            if (showXAxisButton.isChecked()) {
-                if (setX == null) {
-                    setX = createDataSet("X-Axis", getResources().getColor(android.R.color.holo_red_light));
-                    data.addDataSet(setX);
-                }
-                data.addEntry(new Entry(dataPointCount, x), 0); // Add to X-axis dataset
-            }
-            else if (setX != null) data.removeDataSet(setX);
+            // Add a new entry to each dataset regardless of visibility.
+            // This keeps the data arrays in sync.
+            data.addEntry(new Entry(dataPointCount, x), 0);
+            data.addEntry(new Entry(dataPointCount, y), 1);
+            data.addEntry(new Entry(dataPointCount, z), 2);
 
-            if (showYAxisButton.isChecked()) {
-                if (setY == null && showYAxisButton.isChecked()) {
-                    setY = createDataSet("Y-Axis", getResources().getColor(android.R.color.holo_green_light));
-                    data.addDataSet(setY);
-                }
-                data.addEntry(new Entry(dataPointCount, y), 1); // Add to Y-axis dataset
-            }
-            else if (setY != null) data.removeDataSet(setY);
-
-            if (showZAxisButton.isChecked()) {
-                if (setZ == null && showZAxisButton.isChecked()) {
-                    setZ = createDataSet("Z-Axis", getResources().getColor(android.R.color.holo_blue_light));
-                    data.addDataSet(setZ);
-                }
-                data.addEntry(new Entry(dataPointCount, z), 2); // Add to Z-axis dataset
-            }
-            else if (setY != null) data.removeDataSet(setZ);
+            // Now, set the visibility of each dataset based on the toggle button state.
+            // This is the correct way to show/hide lines without breaking the chart.
+            setX.setVisible(showXAxisButton.isChecked());
+            setY.setVisible(showYAxisButton.isChecked());
+            setZ.setVisible(showZAxisButton.isChecked());
 
             data.notifyDataChanged();
 
-            // let the chart know it's data has changed
+            // Let the chart know its data has changed
             accelerometerChart.notifyDataSetChanged();
 
             // Limit the number of visible entries
@@ -887,7 +926,10 @@ public class MainActivity extends AppCompatActivity {
     public void getFileOutputStream() {
         try {
             fileOutputStream = openFileOutput(filename, Context.MODE_PRIVATE);
-        } catch (FileNotFoundException e) {
+            // Write the header row for the CSV file
+            String header = "Time,X_g,Y_g,Z_g\n";
+            fileOutputStream.write(header.getBytes());
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
@@ -897,8 +939,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Write a log of the current accelerometer data into the device's private file
-    public void writeDataToFile(float x, float y, float z, int time) {
-        String data = time + " : (" + x + "," + y + "," + z + ")";
+    public void writeDataToFile(float x, float y, float z, long time) {
+        String data = (time/1000) + "," + x + "," + y + "," + z + "\n";
         try {
             fileOutputStream.write(data.getBytes());
         } catch (IOException e) {
@@ -920,5 +962,40 @@ public class MainActivity extends AppCompatActivity {
         Dialog dialog = new Dialog(this);
         dialog.setContentView(R.layout.download_popup);
         dialog.show();
+
+        Button downloadButton = dialog.findViewById(R.id.downloadButton);
+        downloadButton.setOnClickListener(v -> {
+            exportFileToPublicDirectory();
+        });
+    }
+
+    private void exportFileToPublicDirectory() {
+        // Your logic to copy the file from internal storage to a public directory (e.g., Downloads)
+        // You'll need to request WRITE_EXTERNAL_STORAGE permission if targeting older Android versions.
+        // For modern Android, use MediaStore API.
+        try {
+            File privateFile = new File(getFilesDir(), filename);
+            File publicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File publicFile = new File(publicDir, filename);
+
+            if (!publicDir.exists()) {
+                publicDir.mkdirs();
+            }
+
+            InputStream inputStream = new FileInputStream(privateFile);
+            OutputStream outputStream = new FileOutputStream(publicFile);
+            byte[] buffer = new byte[1024];
+            int read;
+            while ((read = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, read);
+            }
+            inputStream.close();
+            outputStream.flush();
+            outputStream.close();
+            Toast.makeText(this, "File saved to Downloads folder!", Toast.LENGTH_LONG).show();
+        } catch (IOException e) {
+            e.printStackTrace();
+            Toast.makeText(this, "Failed to save file.", Toast.LENGTH_SHORT).show();
+        }
     }
 }

@@ -72,14 +72,14 @@
         android:textStyle="bold" />
 
     <Button
-        android:id="@+id/button"
-        android:backgroundTint="@color/lightblue"
+        android:id="@+id/downloadButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Download Text Log File"
         android:layout_marginStart="16dp"
         android:layout_marginEnd="16dp"
         android:layout_marginBottom="30dp"
-        app:cornerRadius="10dp"/>
+        android:backgroundTint="@color/lightblue"
+        android:text="Download CVS Log File"
+        app:cornerRadius="10dp" />
 
 </LinearLayout>
