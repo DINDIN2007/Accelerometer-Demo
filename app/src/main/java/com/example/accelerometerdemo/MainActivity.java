@@ -124,14 +124,14 @@ public class MainActivity extends AppCompatActivity {
     private ToggleButton showXAxisButton, showYAxisButton, showZAxisButton;
 
     // Chart Data
-    private int dataPointCount = 0;
+    private long dataPointCount = 0;
 
     // Data Saving Variables
     private Button recordButton, resultButton;
     private boolean isRecording = false;
     private final String filename = "accelerometer_data.csv";
     private FileOutputStream fileOutputStream;
-    private long lastLoggedTime = 0;
+    private long firstLoggedTime = 0, lastLoggedTime = 0;
     private float xSum = 0;
     private float ySum = 0;
     private float zSum = 0;
@@ -524,6 +524,7 @@ public class MainActivity extends AppCompatActivity {
                         // Log connection state
                         Log.d(TAG, "Connected to GATT server.");
                         isConnecting = false;
+                        firstLoggedTime = System.currentTimeMillis();
 
                         // Inform user that the connection is successfuly established
                         runOnUiThread(() -> {
@@ -617,7 +618,7 @@ public class MainActivity extends AppCompatActivity {
                 // Get the configuration characteristic
                 BluetoothGattCharacteristic configCharacteristic = mBlueIOService.getCharacteristic(MOTION_CONFIG_CHAR_UUID);
                 if (configCharacteristic == null) {
-                    Log.d(TAG, "Motion Configuration Characteristic not found.");
+                    Log.w(TAG, "Motion Configuration Characteristic not found.");
                     return;
                 }
 
@@ -632,6 +633,8 @@ public class MainActivity extends AppCompatActivity {
                    Gyroscope Sample Rate            |       0.07        | A value from about 5 to 1000 Hz (in hex)
                    etc...
                 */
+
+                // In this case Sample Rate is set to 50 Hz
 
                 configCharacteristic.setValue(new byte[]{0x01, 0x03, 0x00, 0x32, 0x04, 0x02, 0x08, 0x00, 0x0A, (byte) 0xC8, 0x00});
                 if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return;
@@ -755,25 +758,25 @@ public class MainActivity extends AppCompatActivity {
                 float yAccel = yRaw / 256.0f;
                 float zAccel = zRaw / 256.0f;
 
-                long currentTime = System.currentTimeMillis();
+                /*long currentTime = System.currentTimeMillis();
 
                 xSum += xAccel;
                 ySum += yAccel;
                 zSum += zAccel;
                 dataCount++;
 
-                if (currentTime - lastLoggedTime >= 10) {
+                if (currentTime - lastLoggedTime >= 10) { */
                     // Log.d(TAG, String.format("X Raw: %d, Y Raw: %d, Z Raw: %d", xRaw, yRaw, zRaw));
                     // Log.d(TAG, String.format("Accel (g): X=%.4f, Y=%.4f, Z=%.4f", xAccel, yAccel, zAccel));
-                    addAccelerometerEntry(xSum / dataCount, ySum / dataCount, zSum / dataCount);
+                    addAccelerometerEntry(xAccel, yAccel, zAccel);
 
-                    // Reset for next interval
+                    /* Reset for next interval
                     xSum = 0;
                     ySum = 0;
                     zSum = 0;
                     dataCount = 0;
                     lastLoggedTime = currentTime; // Update the last logged time
-                }
+                } */
             } else {
                 Log.w(TAG, "Received empty or null data packet.");
             }
@@ -849,7 +852,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Set axis titles
         chart.getDescription().setText("X-axis: Time (ms) | Y-axis: Acceleration (g)");
-        chart.getXAxis().setValueFormatter(new TimeValueFormatter());
+        chart.getLegend().setEnabled(false);
 
         // Add initial empty data
         chart.setData(new LineData());
@@ -896,7 +899,7 @@ public class MainActivity extends AppCompatActivity {
 
             // Add to data entry if the user decides to record it
             if (isRecording) {
-                writeDataToFile(x, y, z, dataPointCount);
+                writeDataToFile(x, y, z, System.currentTimeMillis() - firstLoggedTime);
             }
 
             // Increase coordinate on x-axis of chart
@@ -940,7 +943,7 @@ public class MainActivity extends AppCompatActivity {
 
     // Write a log of the current accelerometer data into the device's private file
     public void writeDataToFile(float x, float y, float z, long time) {
-        String data = (time/1000) + "," + x + "," + y + "," + z + "\n";
+        String data = (int)(time) + "," + x + "," + y + "," + z + "\n";
         try {
             fileOutputStream.write(data.getBytes());
         } catch (IOException e) {
