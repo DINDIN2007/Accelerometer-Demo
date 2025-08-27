@@ -28,7 +28,7 @@
         android:layout_marginRight="8dp" />
 
     <TextView
-        android:id="@+id/textView2"
+        android:id="@+id/avgForceTxtView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
@@ -38,7 +38,7 @@
         android:textAlignment="center" />
 
     <TextView
-        android:id="@+id/textView6"
+        android:id="@+id/maxForceTxtView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
@@ -50,7 +50,7 @@
         android:textStyle="bold" />
 
     <TextView
-        android:id="@+id/textView4"
+        android:id="@+id/avgAccelTxtView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"
@@ -60,7 +60,7 @@
         android:textAlignment="center" />
 
     <TextView
-        android:id="@+id/textView7"
+        android:id="@+id/maxAccelTxtView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginStart="16dp"

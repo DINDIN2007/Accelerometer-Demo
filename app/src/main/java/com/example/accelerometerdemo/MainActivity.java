@@ -51,12 +51,16 @@ import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet;
 
+import org.w3c.dom.Text;
+
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
@@ -123,6 +127,11 @@ public class MainActivity extends AppCompatActivity {
     private Spinner chartOptionsDropDown, weightUnitDropDown;
     private ToggleButton showXAxisButton, showYAxisButton, showZAxisButton;
 
+    // UI elements in the dialogbox
+    Dialog dialog;
+    LineChart resultChart;
+    TextView avgForceTxt, maxForceTxt, avgAccelTxt, maxAccelTxt;
+
     // Chart Data
     private long dataPointCount = 0;
 
@@ -132,10 +141,9 @@ public class MainActivity extends AppCompatActivity {
     private final String filename = "accelerometer_data.csv";
     private FileOutputStream fileOutputStream;
     private long firstLoggedTime = 0, lastLoggedTime = 0;
-    private float xSum = 0;
-    private float ySum = 0;
-    private float zSum = 0;
+    private float xSum = 0, ySum = 0, zSum = 0;
     private int dataCount = 0;
+    private float userWeight;
 
 
     /*█████╗████████╗░█████╗░██████╗░████████╗
@@ -563,6 +571,7 @@ public class MainActivity extends AppCompatActivity {
                             // Restart scan here if auto-reconnect is needed
                             // scanBluetoothDevices(true);
                             connectButton.setText("Search for Device");
+                            chartLayout.setVisibility(View.GONE);
                         });
 
                         // Close the GATT client
@@ -636,7 +645,7 @@ public class MainActivity extends AppCompatActivity {
 
                 // In this case Sample Rate is set to 50 Hz
 
-                configCharacteristic.setValue(new byte[]{0x01, 0x03, 0x00, 0x32, 0x04, 0x02, 0x08, 0x00, 0x0A, (byte) 0xC8, 0x00});
+                configCharacteristic.setValue(new byte[]{0x01, 0x03, 0x03, 0x32, 0x04, 0x02, 0x08, 0x00, 0x0A, (byte) 0xC8, 0x00});
                 if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) return;
                 gatt.writeCharacteristic(configCharacteristic);
 
@@ -962,14 +971,106 @@ public class MainActivity extends AppCompatActivity {
 
     // Show popup screen when done
     private void showDialog() {
-        Dialog dialog = new Dialog(this);
+        dialog = new Dialog(this);
         dialog.setContentView(R.layout.download_popup);
         dialog.show();
 
+        // Plot results on the chart inside of the popup dialog box
+        resultChart = dialog.findViewById(R.id.accelerometerResultChart);
+        avgForceTxt = dialog.findViewById(R.id.avgForceTxtView);
+        maxForceTxt = dialog.findViewById(R.id.maxForceTxtView);
+        avgAccelTxt = dialog.findViewById(R.id.avgAccelTxtView);
+        maxAccelTxt = dialog.findViewById(R.id.maxAccelTxtView);
+
+        ArrayList<Entry> xEntries = new ArrayList<>();
+        ArrayList<Entry> yEntries = new ArrayList<>();
+        ArrayList<Entry> zEntries = new ArrayList<>();
+
+        float totalAcceleration = 0, maxAcceleration = 0;
+
+        try {
+            FileInputStream fileInputStream = openFileInput(filename);
+            InputStreamReader inputStreamReader = new InputStreamReader(fileInputStream);
+            BufferedReader bufferedReader = new BufferedReader(inputStreamReader);
+            String line;
+
+            // Skip header line
+            bufferedReader.readLine();
+            int dataPointCtr = 0;
+
+            while ((line = bufferedReader.readLine()) != null) {
+                // Row format is : Time, x_g, y_g, z_g
+                String[] data = line.split(",");
+                if (data.length == 4) {
+                    try {
+                        float timestamp = Float.parseFloat(data[0]);
+                        float x = Float.parseFloat(data[1]);
+                        float y = Float.parseFloat(data[2]);
+                        float z = Float.parseFloat(data[3]);
+
+                        // Add entries on the chart for each axis
+                        xEntries.add(new Entry(dataPointCtr, x));
+                        yEntries.add(new Entry(dataPointCtr, y));
+                        zEntries.add(new Entry(dataPointCtr, z));
+
+                        float acceleration = (float) Math.sqrt(x * x + y * y + z * z);
+                        totalAcceleration += acceleration;
+                        maxAcceleration = Math.max(maxAcceleration, acceleration);
+                        dataPointCtr++;
+                    } catch (NumberFormatException e) {
+                        Log.e("CSV_PARSE_ERROR", "Invalid number format in CSV file: " + line);
+                    }
+                }
+            }
+            bufferedReader.close();
+
+            // Calculate average values for force and acceleration
+            avgAccelTxt.setText(String.format("Average Force (N) : %.2f N", (dataPointCtr > 0) ? totalAcceleration / dataPointCtr : 0));
+            maxAccelTxt.setText(String.format("Peak Acceleration (g) : %.2f g", maxAcceleration));
+            avgForceTxt.setText(String.format("Average Acceleration (g) : %.2f g", (dataPointCtr > 0) ? totalAcceleration * userWeight / dataPointCtr : 0));
+            maxForceTxt.setText(String.format("Peak Force (N) : %.2f N", maxAcceleration * userWeight));
+
+            // Create and add datasets to the chart
+            LineDataSet xSet = createDataSetForPlot(xEntries, "X-Axis", getResources().getColor(android.R.color.holo_red_light));
+            LineDataSet ySet = createDataSetForPlot(yEntries, "Y-Axis", getResources().getColor(android.R.color.holo_green_light));
+            LineDataSet zSet = createDataSetForPlot(zEntries, "Z-Axis", getResources().getColor(android.R.color.holo_blue_light));
+
+            LineData lineData = new LineData(xSet, ySet, zSet);
+            resultChart.setData(lineData);
+
+            // Customize the chart appearance
+            resultChart.getDescription().setEnabled(false);
+            resultChart.setTouchEnabled(true);
+            resultChart.setDragEnabled(true);
+            resultChart.setScaleEnabled(true);
+            resultChart.setPinchZoom(true);
+            resultChart.setScaleXEnabled(true);
+            resultChart.setScaleYEnabled(true);
+            resultChart.setVisibleXRangeMaximum(200f);
+            resultChart.moveViewToX(lineData.getEntryCount());
+
+            // Refresh the chart
+            resultChart.invalidate();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            Toast.makeText(this, "Error reading log file.", Toast.LENGTH_SHORT).show();
+        }
+
+        // Button to download the cvs file to device's download folder
         Button downloadButton = dialog.findViewById(R.id.downloadButton);
         downloadButton.setOnClickListener(v -> {
             exportFileToPublicDirectory();
         });
+    }
+
+    private LineDataSet createDataSetForPlot(ArrayList<Entry> entries, String label, int color) {
+        LineDataSet dataSet = new LineDataSet(entries, label);
+        dataSet.setDrawCircles(false);
+        dataSet.setColor(color);
+        dataSet.setLineWidth(2f);
+        dataSet.setMode(LineDataSet.Mode.CUBIC_BEZIER);
+        return dataSet;
     }
 
     private void exportFileToPublicDirectory() {
