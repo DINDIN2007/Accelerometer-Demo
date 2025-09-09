@@ -1,10 +1,10 @@
-#Accelerometer-Demo
+# Accelerometer-Demo
 
 This project is meant to display motion data provided by the ICM-20948 sensor on the BLUEIO-TAG-EVIM sensor board through BLE.
 
 ---
 
-##App Features
+## App Features
 - **Bluetooth Low Energy (BLE) Connectivity:** Connects to the sensor board using the GATT communication protocol after requesting Bluetooth permissions.
 
 - **Real-Time Data Visualization:** Displays real-time motion data from the 9-axis ICM-20948 sensor's 3-axis accelerometer, gyroscope, and magnetometer on a dynamic motion/time chart.
@@ -13,7 +13,7 @@ This project is meant to display motion data provided by the ICM-20948 sensor on
 
 ---
 
-##Prerequisites
+## Prerequisites
 
 **To run and use this application, you will need the following:**
 
@@ -23,7 +23,7 @@ This project is meant to display motion data provided by the ICM-20948 sensor on
 
 ---
 
-##Usage
+## Usage
 **Follow these steps to use the Accelerometer-Demo application:**
 
 1. **Enable Bluetooth:** Make sure Bluetooth is turned on on your Android device.
@@ -40,6 +40,6 @@ This project is meant to display motion data provided by the ICM-20948 sensor on
 
 ---
 
-##License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE.md](https://github.com/DINDIN2007/Accelerometer-Demo?tab=MIT-1-ov-file#readme) file for details.
