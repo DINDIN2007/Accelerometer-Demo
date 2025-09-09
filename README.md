@@ -2,16 +2,12 @@
 
 This project is meant to display motion data provided by the ICM-20948 sensor on the BLUEIO-TAG-EVIM sensor board through BLE.
 
----
-
 ## App Features
 - **Bluetooth Low Energy (BLE) Connectivity:** Connects to the sensor board using the GATT communication protocol after requesting Bluetooth permissions.
 
 - **Real-Time Data Visualization:** Displays real-time motion data from the 9-axis ICM-20948 sensor's 3-axis accelerometer, gyroscope, and magnetometer on a dynamic motion/time chart.
 
 - **Data Recording**: Records the displayed data to a local CSV file on the device, which can be downloaded after the session ends.
-
----
 
 ## Prerequisites
 
@@ -20,8 +16,6 @@ This project is meant to display motion data provided by the ICM-20948 sensor on
 - **An Android device:** The app is designed for Android, so you will need a smartphone or tablet running Android OS. It's recommended to use a device with Android 6.0 (Marshmallow) or higher for full BLE compatibility.
 
 - **[I-Syst's BLUEIO-TAG-EVIM sensor board:](https://micropython.org/download/BLUEIO_TAG_EVIM/)** This android application is configured for this specific sensor.
-
----
 
 ## Usage
 **Follow these steps to use the Accelerometer-Demo application:**
@@ -37,8 +31,6 @@ This project is meant to display motion data provided by the ICM-20948 sensor on
 5. **Record Data:** To start recording, tap the "Record" button. The data will be saved within the app's local storage.
 
 6. **Download CSV:** After you have finished your session, use the "Download" option within the app to save the recorded CSV file to your device.
-
----
 
 ## License
 
